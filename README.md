@@ -1,36 +1,70 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Nkabom
 
-## Getting Started
+**Nkabom** (Twi: *togetherness / unity*) is a trust & safety network for Ghana. It
+helps ordinary people avoid fraud: paste any suspicious SMS, WhatsApp message, or
+offer and Nkabom tells you whether it's a scam — explained in **Twi, Ga, Ewe,
+Hausa, Pidgin or English** — or look up a Mobile Money number to see its
+community trust score.
 
-First, run the development server:
+This is **system 2 of two** Ghana-focused products (the first is [`banbo`](https://github.com/Eselase-Noble/banbo),
+a security scanner). The first shipped pillar is the **Scam & Trust Shield**; an
+AI assistant and a safe social marketplace are planned.
+
+## Features (v1)
+
+- **Scam checker** — paste a message, pick the channel and your language, and get
+  a risk verdict (safe / caution / danger) with a 0–100 score, the red flags
+  detected, a plain-language explanation, and what to do next.
+- **Number lookup** — check a Mobile Money / phone number against a community
+  trust database (trust score, verification, scam reports).
+- **Works with or without AI** — with a Claude API key it uses `claude-opus-4-8`
+  for nuanced, local-language analysis; without one it falls back to a built-in
+  heuristic so the tool always works.
+
+## Tech stack
+
+- Next.js 16 (App Router) + TypeScript + Tailwind CSS v4
+- Prisma ORM + SQLite (swap the datasource to Postgres for production)
+- Anthropic SDK (`@anthropic-ai/sdk`) for scam analysis
+
+## Getting started
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+
+# set up the database
+cp .env.example .env            # then edit if needed
+npx prisma db push              # create the SQLite schema
+npx prisma generate             # generate the client
+node prisma/seed.mjs            # seed sample sellers for the number lookup
+
+npm run dev                     # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Enable AI analysis (optional)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Add a Claude API key to `.env`:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+ANTHROPIC_API_KEY="sk-ant-..."
+```
 
-## Learn More
+Without it, the scam checker uses the offline heuristic analyzer.
 
-To learn more about Next.js, take a look at the following resources:
+## Project layout
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+prisma/schema.prisma      Seller, Report, ScamCheck models
+prisma/seed.mjs           sample seller data
+src/lib/scam.ts           AI + heuristic scam analysis
+src/lib/db.ts             Prisma client singleton
+src/lib/phone.ts          Ghana phone-number normalization
+src/app/api/scam-check    POST — analyze a message
+src/app/api/trust         GET  — look up a number
+src/components/ScamShield.tsx   the lead feature UI
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Disclaimer
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Nkabom gives **guidance, not a guarantee**. Always verify before you pay or share
+your Mobile Money PIN with anyone.

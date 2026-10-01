@@ -4,7 +4,7 @@ import { BlackStar } from "./BlackStar";
 export function SiteHeader() {
   return (
     <header className="border-b border-border bg-background/85 backdrop-blur sticky top-0 z-20">
-      <div className="mx-auto max-w-5xl px-5 h-16 flex items-center justify-between">
+      <div className="mx-auto max-w-6xl px-5 sm:px-8 h-16 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2 group">
           <span className="text-brand group-hover:text-brand-dark transition-colors">
             <BlackStar className="h-6 w-6" />

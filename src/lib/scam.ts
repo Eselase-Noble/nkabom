@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 
-// A scam analysis result shared by the AI analyzer and the heuristic fallback.
+// A scam analysis result shared by the AI analyzers and the heuristic fallback.
 export type RiskLevel = "safe" | "caution" | "danger";
 
 export interface ScamResult {
@@ -10,7 +11,7 @@ export interface ScamResult {
   signals: string[]; // red flags detected
   explanation: string; // plain-language reasoning
   advice: string; // what the user should do
-  source: "ai" | "heuristic"; // which engine produced this
+  source: "claude" | "openai" | "heuristic"; // which engine produced this
 }
 
 export const LANGUAGES: Record<string, string> = {
@@ -47,25 +48,34 @@ const RESULT_SCHEMA = {
 } as const;
 
 /**
- * Analyze a message for scam/fraud risk. Uses Claude when an API key is set;
- * otherwise falls back to a local heuristic so the feature always works.
+ * Analyze a message for scam/fraud risk. Prefers Claude, then OpenAI, then a
+ * local heuristic — so the feature works with whichever key is configured, or
+ * none at all.
  */
 export async function analyzeScam(input: ScamInput): Promise<ScamResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (apiKey && apiKey.trim() !== "") {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
+
+  if (anthropicKey) {
     try {
-      return await analyzeWithClaude(input, apiKey);
+      return await analyzeWithClaude(input, anthropicKey);
     } catch {
-      // Fall through to the heuristic if the API call fails for any reason.
+      // fall through
+    }
+  }
+  if (openaiKey) {
+    try {
+      return await analyzeWithOpenAI(input, openaiKey);
+    } catch {
+      // fall through
     }
   }
   return heuristicAnalyze(input);
 }
 
-async function analyzeWithClaude(input: ScamInput, apiKey: string): Promise<ScamResult> {
-  const client = new Anthropic({ apiKey });
+// Shared instruction + user content, so both providers assess identically.
+function buildPrompts(input: ScamInput): { system: string; user: string } {
   const langName = LANGUAGES[input.language] ?? "English";
-
   const system = `You are Nkabom's fraud-detection assistant for Ghana. You help ordinary people decide whether a message, offer, or call is a scam.
 
 You understand local scam patterns: fake MTN/Telecel/AirtelTigo Mobile Money (MoMo) promotions, "you have won" lottery scams, fake agents asking for PINs or reversal codes, "send money to this number" requests, fake job offers, investment/"double your money" schemes, romance scams, and phishing links.
@@ -85,9 +95,25 @@ Message/offer to check:
 """
 ${input.content}
 """`;
+  return { system, user };
+}
+
+function finalize(parsed: Omit<ScamResult, "source">, source: ScamResult["source"]): ScamResult {
+  return {
+    ...parsed,
+    riskScore: clampScore(parsed.riskScore),
+    riskLevel: normalizeLevel(parsed.riskLevel, parsed.riskScore),
+    signals: parsed.signals ?? [],
+    source,
+  };
+}
+
+async function analyzeWithClaude(input: ScamInput, apiKey: string): Promise<ScamResult> {
+  const client = new Anthropic({ apiKey });
+  const { system, user } = buildPrompts(input);
 
   const response = await client.messages.create({
-    model: "claude-opus-4-8",
+    model: process.env.ANTHROPIC_MODEL?.trim() || "claude-opus-4-8",
     max_tokens: 1024,
     system,
     messages: [{ role: "user", content: user }],
@@ -99,14 +125,28 @@ ${input.content}
     .map((b) => b.text)
     .join("");
 
-  const parsed = JSON.parse(text) as Omit<ScamResult, "source">;
-  return {
-    ...parsed,
-    riskScore: clampScore(parsed.riskScore),
-    riskLevel: normalizeLevel(parsed.riskLevel, parsed.riskScore),
-    signals: parsed.signals ?? [],
-    source: "ai",
-  };
+  return finalize(JSON.parse(text) as Omit<ScamResult, "source">, "claude");
+}
+
+async function analyzeWithOpenAI(input: ScamInput, apiKey: string): Promise<ScamResult> {
+  const client = new OpenAI({ apiKey });
+  const { system, user } = buildPrompts(input);
+
+  const response = await client.chat.completions.create({
+    model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
+    max_tokens: 1024,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: { name: "scam_result", strict: true, schema: RESULT_SCHEMA },
+    },
+  });
+
+  const text = response.choices[0]?.message?.content ?? "{}";
+  return finalize(JSON.parse(text) as Omit<ScamResult, "source">, "openai");
 }
 
 // ---- Heuristic fallback -------------------------------------------------

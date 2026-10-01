@@ -11,8 +11,14 @@ interface ScamResult {
   signals: string[];
   explanation: string;
   advice: string;
-  source: "ai" | "heuristic";
+  source: "claude" | "openai" | "heuristic";
 }
+
+const SOURCE_LABEL: Record<ScamResult["source"], string> = {
+  claude: "Analyzed by Nkabom AI (Claude). Guidance only — it is not a guarantee.",
+  openai: "Analyzed by Nkabom AI (OpenAI). Guidance only — it is not a guarantee.",
+  heuristic: "Quick check (AI off). Guidance only — it is not a guarantee.",
+};
 
 const LANGS = [
   { k: "en", label: "English" },
@@ -181,11 +187,7 @@ function ResultCard({ result }: { result: ScamResult }) {
         <p className="text-sm text-ink/90">{result.advice}</p>
       </div>
 
-      <p className="text-[11px] text-muted">
-        {result.source === "ai"
-          ? "Analyzed by Nkabom AI. Guidance only — it is not a guarantee."
-          : "Quick check (AI off). Guidance only — it is not a guarantee."}
-      </p>
+      <p className="text-[11px] text-muted">{SOURCE_LABEL[result.source]}</p>
     </div>
   );
 }

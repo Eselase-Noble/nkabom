@@ -11,6 +11,7 @@ interface ScamResult {
   signals: string[];
   explanation: string;
   advice: string;
+  extractedText?: string;
   source: "claude" | "openai" | "heuristic";
   checkId?: string;
 }
@@ -99,15 +100,37 @@ function MessageChecker() {
   const [content, setContent] = useState("");
   const [channel, setChannel] = useState("sms");
   const [language, setLanguage] = useState("en");
+  const [image, setImage] = useState<{ b64: string; mime: string; name: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScamResult | null>(null);
 
+  function onPickImage(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("Please choose an image file.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setError("That image is too large (max 5MB).");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result); // data:<mime>;base64,<data>
+      const comma = url.indexOf(",");
+      setImage({ b64: url.slice(comma + 1), mime: file.type, name: file.name });
+      setError(null);
+    };
+    reader.readAsDataURL(file);
+  }
+
   async function check() {
     setError(null);
     setResult(null);
-    if (content.trim().length === 0) {
-      setError("Paste the message you received first.");
+    if (content.trim().length === 0 && !image) {
+      setError("Paste the message, or upload a screenshot of it.");
       return;
     }
     setLoading(true);
@@ -115,7 +138,13 @@ function MessageChecker() {
       const res = await fetch("/api/scam-check", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content, channel, language }),
+        body: JSON.stringify({
+          content,
+          channel,
+          language,
+          imageBase64: image?.b64,
+          imageMime: image?.mime,
+        }),
       });
       const data = await res.json();
       if (!res.ok) setError(data.error ?? "Something went wrong. Try again.");
@@ -131,15 +160,36 @@ function MessageChecker() {
     <div className="space-y-4">
       <div>
         <label className="block text-sm font-medium text-ink mb-1.5">
-          Paste the message or describe the offer
+          Paste the message, or upload a screenshot
         </label>
         <textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          rows={5}
+          rows={4}
           placeholder="e.g. Congratulations! Your number won GHS 5,000 in the MTN promo. Send your PIN to claim…"
           className={`${fieldBase} px-3.5 py-3 text-sm resize-y`}
         />
+        <div className="mt-2 flex items-center gap-3">
+          <label className="inline-flex items-center gap-2 text-sm text-brand hover:text-brand-dark cursor-pointer font-medium">
+            <svg viewBox="0 0 20 20" className="h-4 w-4" fill="currentColor" aria-hidden="true">
+              <path d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm0 2h12v6l-2.5-2.5a1 1 0 00-1.4 0L9 14l-1.6-1.6a1 1 0 00-1.4 0L4 14.4V5zm3 2.5A1.5 1.5 0 118.5 9 1.5 1.5 0 017 7.5z" />
+            </svg>
+            Upload screenshot
+            <input type="file" accept="image/*" onChange={onPickImage} className="hidden" />
+          </label>
+          {image && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted">
+              {image.name}
+              <button
+                onClick={() => setImage(null)}
+                className="text-danger hover:underline"
+                aria-label="Remove image"
+              >
+                remove
+              </button>
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-4">
@@ -156,7 +206,7 @@ function MessageChecker() {
         disabled={loading}
         className="w-full rounded-xl bg-brand px-4 py-3 text-white font-medium hover:bg-brand-dark transition-colors disabled:opacity-60"
       >
-        {loading ? "Checking…" : "Check this message"}
+        {loading ? "Checking…" : image ? "Check this screenshot" : "Check this message"}
       </button>
 
       {error && <p className="text-sm text-danger">{error}</p>}

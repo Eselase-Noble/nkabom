@@ -12,6 +12,7 @@ export interface ScamResult {
   signals: string[]; // red flags detected
   explanation: string; // plain-language reasoning
   advice: string; // what the user should do
+  extractedText?: string; // text read from an uploaded image (vision path)
   source: "claude" | "openai" | "heuristic"; // which engine produced this
 }
 
@@ -31,6 +32,8 @@ export interface ScamInput {
   content: string;
   channel: Channel;
   language: string; // key of LANGUAGES
+  imageBase64?: string; // optional screenshot (base64, no data: prefix)
+  imageMime?: string; // e.g. "image/png", "image/jpeg"
 }
 
 // JSON schema the model must return, so we always get a well-formed result.
@@ -44,8 +47,9 @@ const RESULT_SCHEMA = {
     signals: { type: "array", items: { type: "string" } },
     explanation: { type: "string" },
     advice: { type: "string" },
+    extractedText: { type: "string" },
   },
-  required: ["riskLevel", "riskScore", "verdict", "signals", "explanation", "advice"],
+  required: ["riskLevel", "riskScore", "verdict", "signals", "explanation", "advice", "extractedText"],
 } as const;
 
 /**
@@ -74,7 +78,25 @@ export async function analyzeScam(
       // fall through
     }
   }
+  // Images can only be read by an AI provider; the offline heuristic can't OCR.
+  if (input.imageBase64) return imageUnsupported(input.language);
   return heuristicAnalyze(input, learned);
+}
+
+// Returned when an image is submitted but no AI provider is configured.
+function imageUnsupported(language: string): ScamResult {
+  const en = language === "en" || !(language in LANGUAGES);
+  return {
+    riskLevel: "caution",
+    riskScore: 0,
+    verdict: en ? "Can't read images without AI enabled." : "Can't read images without AI enabled.",
+    signals: [],
+    explanation:
+      "Reading a screenshot needs an AI provider. Type or paste the message text instead, or enable an API key.",
+    advice: "Paste the message as text to get a full check.",
+    extractedText: "",
+    source: "heuristic",
+  };
 }
 
 // Shared instruction + user content, so both providers assess identically.
@@ -105,15 +127,19 @@ Assess the risk and respond with:
 - signals: the specific red flags you detected (empty if none)
 - explanation: 1-3 sentences explaining your reasoning for a non-technical person
 - advice: concrete next step (e.g. "Do not send money or share your PIN. Call the official number on the back of your SIM pack.")
+- extractedText: if an image is attached, the exact text you read from it; otherwise an empty string.
 
 Write "verdict", "explanation", and "advice" in ${langName}. Keep "signals" short (they may stay in English).`;
 
-  const user = `Channel: ${input.channel}
+  const body = input.imageBase64
+    ? `Channel: ${input.channel}
+The message to check is in the attached screenshot. Read it, put what you read in extractedText, and assess it.${input.content ? `\nThe user also added: "${input.content}"` : ""}`
+    : `Channel: ${input.channel}
 Message/offer to check:
 """
 ${input.content}
 """`;
-  return { system, user };
+  return { system, user: body };
 }
 
 function finalize(parsed: Omit<ScamResult, "source">, source: ScamResult["source"]): ScamResult {
@@ -134,11 +160,24 @@ async function analyzeWithClaude(
   const client = new Anthropic({ apiKey });
   const { system, user } = buildPrompts(input, learned);
 
+  const userContent: Anthropic.ContentBlockParam[] = [];
+  if (input.imageBase64) {
+    userContent.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: (input.imageMime as "image/png" | "image/jpeg" | "image/gif" | "image/webp") || "image/png",
+        data: input.imageBase64,
+      },
+    });
+  }
+  userContent.push({ type: "text", text: user });
+
   const response = await client.messages.create({
     model: process.env.ANTHROPIC_MODEL?.trim() || "claude-opus-4-8",
     max_tokens: 1024,
     system,
-    messages: [{ role: "user", content: user }],
+    messages: [{ role: "user", content: userContent }],
     output_config: { format: { type: "json_schema", schema: RESULT_SCHEMA } },
   });
 
@@ -158,12 +197,22 @@ async function analyzeWithOpenAI(
   const client = new OpenAI({ apiKey });
   const { system, user } = buildPrompts(input, learned);
 
+  const userContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
+    { type: "text", text: user },
+  ];
+  if (input.imageBase64) {
+    userContent.push({
+      type: "image_url",
+      image_url: { url: `data:${input.imageMime || "image/png"};base64,${input.imageBase64}` },
+    });
+  }
+
   const response = await client.chat.completions.create({
     model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
     max_tokens: 1024,
     messages: [
       { role: "system", content: system },
-      { role: "user", content: user },
+      { role: "user", content: userContent },
     ],
     response_format: {
       type: "json_schema",

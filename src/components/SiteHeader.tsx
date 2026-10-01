@@ -17,8 +17,8 @@ export function SiteHeader() {
           <a href="#shield" className="text-muted hover:text-ink transition-colors">
             Scam Shield
           </a>
-          <a href="#more" className="text-muted hover:text-ink transition-colors hidden sm:inline">
-            What&apos;s next
+          <a href="/stats" className="text-muted hover:text-ink transition-colors hidden sm:inline">
+            Insights
           </a>
           <a
             href="#shield"

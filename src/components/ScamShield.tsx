@@ -226,6 +226,13 @@ function ResultCard({ result }: { result: ScamResult }) {
       <p className="font-display text-xl font-bold leading-snug text-ink">{result.verdict}</p>
       <p className="text-sm text-ink/80 leading-relaxed">{result.explanation}</p>
 
+      {result.extractedText && result.extractedText.trim().length > 0 && (
+        <div className="rounded-lg bg-surface/70 border border-border p-3">
+          <p className="font-display text-sm font-bold text-ink mb-1">Text read from your screenshot</p>
+          <p className="text-sm text-ink/80 whitespace-pre-wrap">{result.extractedText}</p>
+        </div>
+      )}
+
       {result.signals.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {result.signals.map((sig, i) => (
@@ -244,10 +251,39 @@ function ResultCard({ result }: { result: ScamResult }) {
         <p className="text-sm text-ink/90">{result.advice}</p>
       </div>
 
+      {result.riskLevel !== "safe" && <ShareWarning result={result} />}
+
       {result.checkId && <Feedback checkId={result.checkId} />}
 
       <p className="text-[11px] text-muted">{SOURCE_LABEL[result.source]}</p>
     </div>
+  );
+}
+
+function ShareWarning({ result }: { result: ScamResult }) {
+  function share() {
+    const site = typeof window !== "undefined" ? window.location.origin : "";
+    const msg =
+      `⚠️ Nkabom scam alert (${result.riskScore}/100): ${result.verdict}\n\n` +
+      `${result.advice}\n\n` +
+      `Check suspicious messages free at ${site}`;
+    // Prefer the native share sheet on mobile; fall back to WhatsApp.
+    if (typeof navigator !== "undefined" && navigator.share) {
+      navigator.share({ title: "Nkabom scam alert", text: msg }).catch(() => {});
+    } else {
+      window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank", "noopener");
+    }
+  }
+  return (
+    <button
+      onClick={share}
+      className="inline-flex items-center gap-2 rounded-lg bg-[#25D366] px-3.5 py-2 text-sm font-medium text-white hover:brightness-95 transition"
+    >
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden="true">
+        <path d="M12 2a10 10 0 00-8.6 15l-1.3 4.8 4.9-1.3A10 10 0 1012 2zm5.8 14.2c-.2.7-1.4 1.3-2 1.4-.5.1-1.2.1-1.9-.1-.4-.1-1-.3-1.7-.6-3-1.3-4.9-4.3-5-4.5-.2-.2-1.2-1.6-1.2-3s.7-2.1 1-2.4c.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 1.9c.1.2.1.4 0 .5l-.3.5-.3.3c-.1.1-.3.3-.1.6.1.3.6 1 1.3 1.6.9.8 1.6 1 1.9 1.2.3.1.4.1.6-.1l.7-.8c.2-.2.3-.2.6-.1l1.8.9c.2.1.4.2.5.3.1.2.1.6-.1 1.3z" />
+      </svg>
+      Share this warning
+    </button>
   );
 }
 
@@ -347,9 +383,12 @@ function NumberChecker() {
       {error && <p className="text-sm text-danger">{error}</p>}
 
       {data && !data.found && (
-        <div className="rounded-xl ring-1 ring-caution/30 bg-caution/10 p-4">
-          <p className="font-display text-lg font-bold text-caution mb-1">No record yet</p>
-          <p className="text-sm text-ink/80">{data.message}</p>
+        <div className="rounded-xl ring-1 ring-caution/30 bg-caution/10 p-4 space-y-3">
+          <div>
+            <p className="font-display text-lg font-bold text-caution mb-1">No record yet</p>
+            <p className="text-sm text-ink/80">{data.message}</p>
+          </div>
+          <FlagNumber phone={data.phone} />
         </div>
       )}
 
@@ -410,7 +449,37 @@ function SellerCard({ seller, phone }: { seller: any; phone: string }) {
           )}
         </div>
       )}
+
+      <FlagNumber phone={phone} />
     </div>
+  );
+}
+
+function FlagNumber({ phone }: { phone: string }) {
+  const [state, setState] = useState<"idle" | "sending" | "done">("idle");
+  async function flag() {
+    setState("sending");
+    try {
+      await fetch("/api/trust/report", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phone }),
+      });
+      setState("done");
+    } catch {
+      setState("idle");
+    }
+  }
+  if (state === "done")
+    return <p className="text-xs text-brand font-medium pt-1">Thanks — this number is now flagged for the community.</p>;
+  return (
+    <button
+      onClick={flag}
+      disabled={state === "sending"}
+      className="text-xs rounded-md border border-border px-2.5 py-1.5 text-ink hover:border-danger hover:text-danger transition-colors disabled:opacity-60"
+    >
+      {state === "sending" ? "Reporting…" : "Report this number as a scam"}
+    </button>
   );
 }
 

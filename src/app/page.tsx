@@ -1,4 +1,5 @@
 import { ScamShield } from "@/components/ScamShield";
+import { TrendsStrip } from "@/components/TrendsStrip";
 
 export default function Home() {
   return (
@@ -32,6 +33,9 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      {/* Scams going around now — makes the learning loop visible */}
+      <TrendsStrip />
 
       {/* Why — three columns, left-aligned, grounded in safe/caution/danger */}
       <section className="mx-auto max-w-6xl px-5 sm:px-8 py-16">

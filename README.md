@@ -17,9 +17,25 @@ AI assistant and a safe social marketplace are planned.
   detected, a plain-language explanation, and what to do next.
 - **Number lookup** — check a Mobile Money / phone number against a community
   trust database (trust score, verification, scam reports).
-- **Works with or without AI** — with a Claude API key it uses `claude-opus-4-8`
-  for nuanced, local-language analysis; without one it falls back to a built-in
-  heuristic so the tool always works.
+- **Report a scam** — anyone can paste a scam message/link/number so Nkabom
+  learns from it immediately.
+- **Works with or without AI** — Claude preferred (`claude-opus-4-8`), OpenAI as
+  a fallback, and a built-in heuristic when no key is set, so the tool always works.
+
+## Online learning loop
+
+Nkabom improves from the requests coming in — no model retraining required
+(see `src/lib/learn.ts`):
+
+1. **Community memory** — numbers found in scam messages are extracted and
+   recorded, so the number lookup learns from what people check and report.
+2. **Online keyword model** — a `LearnedSignal` table accumulates how often each
+   term appears in scam vs. safe messages; the heuristic reads these weights and
+   adapts incrementally with every labelled request.
+3. **Retrieval (RAG)** — each new check is analyzed with recent confirmed scams
+   injected as context, so the AI tracks current scam waves.
+4. **Feedback** — users confirm "it was a scam / actually safe," and reports are
+   treated as strong scam labels, correcting and reinforcing the above.
 
 ## Tech stack
 

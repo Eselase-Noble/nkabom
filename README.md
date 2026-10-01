@@ -10,6 +10,14 @@ This is **system 2 of two** Ghana-focused products (the first is [`banbo`](https
 a security scanner). The first shipped pillar is the **Scam & Trust Shield**; an
 AI assistant and a safe social marketplace are planned.
 
+## Research context
+
+Nkabom sits in a research portfolio across **health care**, **system improvement**, and
+**fraud detection** — it is the **fraud-detection** work, applied to everyday consumer
+protection in Ghana. Its [online learning loop](#online-learning-loop) is a working model
+for detection systems that improve from live data without retraining, an approach that
+transfers directly to health-care fraud (e.g. anomalous insurance/NHIS claims).
+
 ## Features (v1)
 
 - **Scam checker** — paste a message, pick the channel and your language, and get

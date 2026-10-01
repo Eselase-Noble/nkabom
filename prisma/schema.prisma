@@ -1,0 +1,49 @@
+// Nkabom data model (MVP).
+// SQLite for local dev; swap the datasource provider to "postgresql" for prod.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// A seller/merchant whose trustworthiness the community can look up.
+/// Identified primarily by their MoMo / phone number — the way deals happen in Ghana.
+model Seller {
+  id           String   @id @default(cuid())
+  name         String
+  businessName String?
+  phone        String   @unique // MoMo / contact number, normalized
+  region       String? // e.g. "Greater Accra"
+  verified     Boolean  @default(false)
+  trustScore   Int      @default(50) // 0-100, derived from reports
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  reports Report[]
+}
+
+/// A community report about a seller (positive or negative) feeding the trust score.
+model Report {
+  id        String   @id @default(cuid())
+  seller    Seller   @relation(fields: [sellerId], references: [id])
+  sellerId  String
+  kind      String // "scam" | "complaint" | "praise"
+  note      String?
+  createdAt DateTime @default(now())
+}
+
+/// A saved result of the AI scam checker, so popular scams can be tracked over time.
+model ScamCheck {
+  id        String   @id @default(cuid())
+  content   String // the message/offer the user pasted
+  channel   String // "sms" | "whatsapp" | "call" | "social" | "other"
+  language  String // requested explanation language, e.g. "en", "twi"
+  riskLevel String // "safe" | "caution" | "danger"
+  riskScore Int // 0-100
+  verdict   String // short plain-language verdict
+  signals   String // JSON array of detected red-flag strings
+  createdAt DateTime @default(now())
+}

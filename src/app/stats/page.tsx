@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { getTrendingTerms } from "@/lib/learn";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,11 +19,7 @@ export default async function StatsPage() {
       db.scamCheck.count({ where: { feedback: "scam" } }),
       db.seller.count({ where: { reports: { some: { kind: "scam" } } } }),
       db.learnedSignal.count(),
-      db.learnedSignal.findMany({
-        where: { scamCount: { gte: 2 } },
-        orderBy: { scamCount: "desc" },
-        take: 20,
-      }),
+      getTrendingTerms(20),
       db.scamCheck.findMany({ orderBy: { createdAt: "desc" }, take: 10 }),
     ]);
 
@@ -55,13 +52,11 @@ export default async function StatsPage() {
             <div className="flex flex-wrap gap-2">
               {topTerms.map((t) => (
                 <span
-                  key={t.term}
+                  key={t.label}
                   className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-sm"
                 >
-                  <span className={t.term.startsWith("num:") ? "tabular-nums" : ""}>
-                    {t.term.startsWith("num:") ? t.term.slice(4) : t.term}
-                  </span>
-                  <span className="text-xs text-danger font-medium">{t.scamCount}</span>
+                  <span className={t.isNumber ? "tabular-nums" : ""}>{t.label}</span>
+                  <span className="text-xs text-danger font-medium">{t.count}</span>
                 </span>
               ))}
             </div>

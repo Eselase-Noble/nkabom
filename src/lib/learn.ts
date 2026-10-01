@@ -18,11 +18,29 @@ export interface LearnedContext {
   flaggedNumbers: string[]; // numbers the community has reported
 }
 
+// Common English function/filler words that carry no scam signal. Kept broad so
+// the learned-term feed surfaces real indicators (pin, momo, promo, won…), not
+// grammar. Scam-relevant short words (pin, won, otp, sim) are deliberately absent.
 const STOPWORDS = new Set(
-  "the a an and or to of in on for your you we is it are be this that with have has will now not no yes if then from at as your you'r they them i me my our can your".split(
-    " ",
-  ),
+  (
+    "a an and are as at be been being but by can cant could did do does doing done dont for from " +
+    "had has have having her here hers him his how i if in into is it its just like make me my no " +
+    "not now of off on once only or our out over own per put re see so some such than that the their " +
+    "them then there these they this those to too under until up us use using very was we were what " +
+    "when where which while who whom why will with would you your yours all any been get got new one " +
+    "out via way well also more most much many back come goes went good day today "
+  ).split(/\s+/).filter(Boolean),
 );
+
+// A term worth tracking as a signal: not a stopword, not a bare number
+// (amounts/fragments), reasonable length. Phone numbers (num: prefix) always pass.
+export function isMeaningfulTerm(term: string): boolean {
+  if (term.startsWith("num:")) return true;
+  if (/^\d+$/.test(term)) return false; // pure numbers: amounts, fragments like 317/539
+  if (term.length < 3 || term.length > 24) return false;
+  if (STOPWORDS.has(term)) return false;
+  return true;
+}
 
 // Pull candidate signal terms out of a message: informative words + any phone
 // numbers (as whole tokens).
@@ -31,10 +49,47 @@ export function tokenize(text: string): string[] {
   const words = lower
     .replace(/[^a-z0-9₵+\s]/g, " ")
     .split(/\s+/)
-    .filter((w) => w.length >= 3 && w.length <= 24 && !STOPWORDS.has(w) && !/^\d{1,2}$/.test(w));
+    .filter(isMeaningfulTerm);
   const terms = new Set(words);
   for (const n of extractGhNumbers(text)) terms.add("num:" + n);
   return [...terms];
+}
+
+// Laplace-smoothed probability a term signals a scam (0..1).
+export function scamWeight(scamCount: number, safeCount: number): number {
+  return (scamCount + 1) / (scamCount + safeCount + 2);
+}
+
+// Minimum times a term must appear in scams before we trust it as a signal.
+// Noise is filtered by isMeaningfulTerm + the scam-ratio test, so this can stay
+// low without surfacing junk.
+export const MIN_SCAM_SUPPORT = 2;
+
+export interface TrendingTerm {
+  label: string; // display text (phone number or word)
+  isNumber: boolean;
+  count: number; // scamCount
+  weight: number; // scam probability 0..1
+}
+
+// The single source of truth for "which learned terms are trustworthy signals",
+// used by the trends feed, the stats page, and the detection context. Requires
+// enough support AND a strong scam lean, and drops noise terms.
+export async function getTrendingTerms(limit = 14): Promise<TrendingTerm[]> {
+  const rows = await db.learnedSignal.findMany({
+    where: { scamCount: { gte: MIN_SCAM_SUPPORT } },
+    orderBy: { scamCount: "desc" },
+    take: limit * 5,
+  });
+  return rows
+    .filter((r) => isMeaningfulTerm(r.term) && scamWeight(r.scamCount, r.safeCount) >= 0.66)
+    .slice(0, limit)
+    .map((r) => ({
+      label: r.term.startsWith("num:") ? r.term.slice(4) : r.term,
+      isNumber: r.term.startsWith("num:"),
+      count: r.scamCount,
+      weight: scamWeight(r.scamCount, r.safeCount),
+    }));
 }
 
 // Extract Ghanaian phone / MoMo numbers from free text.
@@ -98,18 +153,14 @@ export async function recordScamNumbers(content: string): Promise<void> {
 // --- retrieval for the next request --------------------------------------
 
 export async function getLearnedContext(): Promise<LearnedContext> {
-  const [recent, learned, flagged] = await Promise.all([
+  const [recent, trending, flagged] = await Promise.all([
     db.scamCheck.findMany({
       where: { OR: [{ feedback: "scam" }, { riskLevel: "danger" }] },
       orderBy: { createdAt: "desc" },
       take: 6,
       select: { content: true },
     }),
-    db.learnedSignal.findMany({
-      where: { scamCount: { gte: 3 } },
-      orderBy: { scamCount: "desc" },
-      take: 40,
-    }),
+    getTrendingTerms(40),
     db.seller.findMany({
       where: { reports: { some: { kind: "scam" } } },
       select: { phone: true },
@@ -117,13 +168,11 @@ export async function getLearnedContext(): Promise<LearnedContext> {
     }),
   ]);
 
-  const learnedTerms = learned
-    .map((s) => {
-      const total = s.scamCount + s.safeCount;
-      const weight = s.scamCount / (total + 1); // 0..1, laplace-smoothed
-      return { term: s.term, weight };
-    })
-    .filter((t) => t.weight >= 0.75);
+  // Rebuild the stored token form (num: prefix) for the heuristic matcher.
+  const learnedTerms = trending.map((t) => ({
+    term: t.isNumber ? "num:" + t.label : t.label,
+    weight: t.weight,
+  }));
 
   return {
     recentScams: recent.map((r) => r.content.trim().slice(0, 160)),

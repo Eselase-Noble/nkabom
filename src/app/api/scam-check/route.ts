@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { analyzeScam, CHANNELS, LANGUAGES, type Channel } from "@/lib/scam";
 import { db } from "@/lib/db";
+import { getLearnedContext, learnFromCheck } from "@/lib/learn";
 
 export const runtime = "nodejs";
 
@@ -30,17 +31,22 @@ export async function POST(request: Request) {
     : "other";
   const safeLanguage = language && language in LANGUAGES ? language : "en";
 
-  const result = await analyzeScam({
-    content: content.trim(),
-    channel: safeChannel,
-    language: safeLanguage,
-  });
+  const trimmed = content.trim();
 
-  // Persist the check (best-effort; a DB hiccup shouldn't fail the response).
+  // Pull what Nkabom has learned so far and analyze with it as context.
+  const learned = await getLearnedContext().catch(() => undefined);
+
+  const result = await analyzeScam(
+    { content: trimmed, channel: safeChannel, language: safeLanguage },
+    learned,
+  );
+
+  // Persist the check and learn from it (best-effort).
+  let checkId: string | undefined;
   try {
-    await db.scamCheck.create({
+    const row = await db.scamCheck.create({
       data: {
-        content: content.trim().slice(0, 5000),
+        content: trimmed.slice(0, 5000),
         channel: safeChannel,
         language: safeLanguage,
         riskLevel: result.riskLevel,
@@ -48,10 +54,16 @@ export async function POST(request: Request) {
         verdict: result.verdict,
         signals: JSON.stringify(result.signals),
       },
+      select: { id: true },
     });
+    checkId = row.id;
+
+    // Weak online label from the verdict (user feedback can correct it later).
+    if (result.riskLevel === "danger") await learnFromCheck(trimmed, "scam");
+    else if (result.riskLevel === "safe") await learnFromCheck(trimmed, "safe");
   } catch {
-    // ignore persistence errors
+    // ignore persistence/learning errors
   }
 
-  return NextResponse.json(result);
+  return NextResponse.json({ ...result, checkId });
 }

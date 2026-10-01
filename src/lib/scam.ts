@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
+import { extractGhNumbers, type LearnedContext } from "@/lib/learn";
 
 // A scam analysis result shared by the AI analyzers and the heuristic fallback.
 export type RiskLevel = "safe" | "caution" | "danger";
@@ -52,33 +53,50 @@ const RESULT_SCHEMA = {
  * local heuristic — so the feature works with whichever key is configured, or
  * none at all.
  */
-export async function analyzeScam(input: ScamInput): Promise<ScamResult> {
+export async function analyzeScam(
+  input: ScamInput,
+  learned?: LearnedContext,
+): Promise<ScamResult> {
   const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
   const openaiKey = process.env.OPENAI_API_KEY?.trim();
 
   if (anthropicKey) {
     try {
-      return await analyzeWithClaude(input, anthropicKey);
+      return await analyzeWithClaude(input, anthropicKey, learned);
     } catch {
       // fall through
     }
   }
   if (openaiKey) {
     try {
-      return await analyzeWithOpenAI(input, openaiKey);
+      return await analyzeWithOpenAI(input, openaiKey, learned);
     } catch {
       // fall through
     }
   }
-  return heuristicAnalyze(input);
+  return heuristicAnalyze(input, learned);
 }
 
 // Shared instruction + user content, so both providers assess identically.
-function buildPrompts(input: ScamInput): { system: string; user: string } {
+function buildPrompts(input: ScamInput, learned?: LearnedContext): { system: string; user: string } {
   const langName = LANGUAGES[input.language] ?? "English";
+  let intel = "";
+  if (learned && (learned.recentScams.length || learned.learnedTerms.length)) {
+    const scams = learned.recentScams.map((s, i) => `${i + 1}. ${s}`).join("\n");
+    const terms = learned.learnedTerms
+      .slice(0, 20)
+      .map((t) => t.term.replace(/^num:/, "number "))
+      .join(", ");
+    intel =
+      `\n\nRECENT SCAM INTELLIGENCE (reported by Nkabom users lately — treat these as known scams and weigh similar new messages accordingly):\n` +
+      (scams || "(none yet)") +
+      (terms ? `\n\nFrequently-seen scam terms/numbers: ${terms}` : "") +
+      "\n";
+  }
+
   const system = `You are Nkabom's fraud-detection assistant for Ghana. You help ordinary people decide whether a message, offer, or call is a scam.
 
-You understand local scam patterns: fake MTN/Telecel/AirtelTigo Mobile Money (MoMo) promotions, "you have won" lottery scams, fake agents asking for PINs or reversal codes, "send money to this number" requests, fake job offers, investment/"double your money" schemes, romance scams, and phishing links.
+You understand local scam patterns: fake MTN/Telecel/AirtelTigo Mobile Money (MoMo) promotions, "you have won" lottery scams, fake agents asking for PINs or reversal codes, "send money to this number" requests, fake job offers, investment/"double your money" schemes, romance scams, and phishing links.${intel}
 
 Assess the risk and respond with:
 - riskScore: 0-100 (0 = clearly safe, 100 = definitely a scam)
@@ -108,9 +126,13 @@ function finalize(parsed: Omit<ScamResult, "source">, source: ScamResult["source
   };
 }
 
-async function analyzeWithClaude(input: ScamInput, apiKey: string): Promise<ScamResult> {
+async function analyzeWithClaude(
+  input: ScamInput,
+  apiKey: string,
+  learned?: LearnedContext,
+): Promise<ScamResult> {
   const client = new Anthropic({ apiKey });
-  const { system, user } = buildPrompts(input);
+  const { system, user } = buildPrompts(input, learned);
 
   const response = await client.messages.create({
     model: process.env.ANTHROPIC_MODEL?.trim() || "claude-opus-4-8",
@@ -128,9 +150,13 @@ async function analyzeWithClaude(input: ScamInput, apiKey: string): Promise<Scam
   return finalize(JSON.parse(text) as Omit<ScamResult, "source">, "claude");
 }
 
-async function analyzeWithOpenAI(input: ScamInput, apiKey: string): Promise<ScamResult> {
+async function analyzeWithOpenAI(
+  input: ScamInput,
+  apiKey: string,
+  learned?: LearnedContext,
+): Promise<ScamResult> {
   const client = new OpenAI({ apiKey });
-  const { system, user } = buildPrompts(input);
+  const { system, user } = buildPrompts(input, learned);
 
   const response = await client.chat.completions.create({
     model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
@@ -173,8 +199,9 @@ const PATTERNS: Pattern[] = [
   { re: /job offer|vacancy|recruitment|work from home/i, weight: 15, signal: "Possible fake job offer" },
 ];
 
-export function heuristicAnalyze(input: ScamInput): ScamResult {
+export function heuristicAnalyze(input: ScamInput, learned?: LearnedContext): ScamResult {
   const text = input.content ?? "";
+  const lower = text.toLowerCase();
   const matched: string[] = [];
   let score = 0;
   for (const p of PATTERNS) {
@@ -185,6 +212,25 @@ export function heuristicAnalyze(input: ScamInput): ScamResult {
   }
   // A link plus a money/PIN ask is a strong combination.
   if (matched.length >= 3) score += 10;
+
+  // --- learned signals (online model + community memory) ---
+  if (learned) {
+    const flagged = new Set(learned.flaggedNumbers);
+    if (extractGhNumbers(text).some((n) => flagged.has(n))) {
+      score += 45;
+      matched.push("Number already reported by the community");
+    }
+    let hits = 0;
+    for (const { term } of learned.learnedTerms) {
+      if (term.startsWith("num:")) continue; // numbers handled above
+      if (new RegExp(`\\b${escapeRegex(term)}\\b`).test(lower)) hits++;
+    }
+    if (hits > 0) {
+      score += Math.min(30, hits * 8);
+      matched.push(`Matches ${hits} learned scam pattern${hits === 1 ? "" : "s"}`);
+    }
+  }
+
   score = clampScore(score);
 
   const riskLevel = normalizeLevel(undefined, score);
@@ -220,6 +266,10 @@ export function heuristicAnalyze(input: ScamInput): ScamResult {
 function clampScore(n: number): number {
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function normalizeLevel(level: RiskLevel | undefined, score: number): RiskLevel {

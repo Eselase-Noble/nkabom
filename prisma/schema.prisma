@@ -35,7 +35,8 @@ model Report {
   createdAt DateTime @default(now())
 }
 
-/// A saved result of the AI scam checker, so popular scams can be tracked over time.
+/// A saved result of the AI scam checker. These rows ARE the training signal:
+/// confirmed scams feed retrieval (RAG) and community number reports over time.
 model ScamCheck {
   id        String   @id @default(cuid())
   content   String // the message/offer the user pasted
@@ -45,5 +46,23 @@ model ScamCheck {
   riskScore Int // 0-100
   verdict   String // short plain-language verdict
   signals   String // JSON array of detected red-flag strings
+  feedback  String? // user ground truth: "scam" | "safe" | null
+  learned   Boolean  @default(false) // whether we've mined this row into community memory
   createdAt DateTime @default(now())
+
+  @@index([riskLevel, createdAt])
+  @@index([feedback])
+}
+
+/// Online-learned signal weights. Each term accumulates how often it appears in
+/// scam vs. safe messages; the heuristic reads these to adapt over time. This is
+/// the "model" that updates incrementally with every labelled request.
+model LearnedSignal {
+  id        String   @id @default(cuid())
+  term      String   @unique // normalized keyword or number token
+  scamCount Int      @default(0)
+  safeCount Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@index([scamCount])
 }
